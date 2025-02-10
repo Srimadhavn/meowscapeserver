@@ -26,7 +26,7 @@ const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/lovech
 // Basic middleware setup
 app.use(express.json());
 app.use(cors({
-  origin: '*',
+  origin: ['http://localhost:3000', 'https://meowscapeserver.onrender.com'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   credentials: true
@@ -43,7 +43,7 @@ app.get('/health', (req, res) => {
 
 const io = new Server(server, {
   cors: {
-    origin: '*',
+    origin: ['http://localhost:3000', 'https://meowscapeserver.onrender.com'],
     methods: ["GET", "POST"],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
@@ -144,7 +144,11 @@ const upload = multer({
 const audioUpload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {
-      cb(null, audioDir);
+      const dir = 'uploads/audio';
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      cb(null, dir);
     },
     filename: (req, file, cb) => {
       const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -155,7 +159,6 @@ const audioUpload = multer({
     fileSize: 10 * 1024 * 1024 // 10MB limit
   },
   fileFilter: (req, file, cb) => {
-    // Accept audio/webm and audio/* MIME types
     if (file.mimetype === 'audio/webm' || file.mimetype.startsWith('audio/')) {
       cb(null, true);
     } else {
@@ -165,7 +168,10 @@ const audioUpload = multer({
 });
 
 // Enable CORS for the sticker endpoints
-app.use('/api/stickers', cors());
+app.use('/api/stickers', cors({
+  origin: ['http://localhost:3000', 'https://meowscapeserver.onrender.com'],
+  credentials: true
+}));
 
 // Track typing status
 const typingUsers = new Map();
@@ -502,48 +508,54 @@ app.post('/api/upload-audio', audioUpload.single('audio'), async (req, res) => {
       return res.status(400).json({ message: 'No audio file uploaded' });
     }
 
-    // Upload to Cloudinary
-    const result = await cloudinary.uploader.upload(req.file.path, {
-      resource_type: 'video', // Cloudinary uses 'video' type for audio
-      folder: 'chat-audio',
-      format: 'mp3',
-      audio_codec: 'aac', // Use AAC codec for better compatibility
-      bit_rate: '128k' // Set bitrate for quality
-    });
+    console.log('Uploading audio file:', req.file); // Debug log
 
-    // Clean up the temporary file
-    fs.unlinkSync(req.file.path);
+    // Make sure the uploads directory exists
+    if (!fs.existsSync('uploads/audio')) {
+      fs.mkdirSync('uploads/audio', { recursive: true });
+    }
 
-    // Save to database
-    const message = new Message({
-      type: 'audio',
-      text: result.secure_url,
-      username: req.body.username || 'Anonymous',
-      timestamp: new Date()
-    });
+    // Upload to Cloudinary with proper error handling
+    try {
+      const result = await cloudinary.uploader.upload(req.file.path, {
+        resource_type: 'video', // Cloudinary uses 'video' type for audio
+        folder: 'chat-audio',
+        format: 'mp3'
+      });
 
-    await message.save();
-
-    // Send response
-    res.json({ 
-      url: result.secure_url,
-      type: 'audio',
-      messageId: message._id
-    });
-
-  } catch (error) {
-    console.error('Error uploading audio:', error);
-    
-    // Clean up the file if it exists and there was an error
-    if (req.file && req.file.path) {
+      // Clean up the temporary file
       try {
         fs.unlinkSync(req.file.path);
       } catch (unlinkError) {
-        console.error('Error deleting temporary file:', unlinkError);
+        console.error('Error deleting temp file:', unlinkError);
+        // Continue even if cleanup fails
       }
+
+      // Send response
+      res.json({ 
+        url: result.secure_url,
+        type: 'audio'
+      });
+
+    } catch (cloudinaryError) {
+      console.error('Cloudinary upload error:', cloudinaryError);
+      // Clean up on cloudinary error
+      if (req.file && req.file.path) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (unlinkError) {
+          console.error('Error deleting temp file:', unlinkError);
+        }
+      }
+      throw new Error('Failed to upload to Cloudinary');
     }
-    
-    res.status(500).json({ message: 'Failed to upload audio' });
+
+  } catch (error) {
+    console.error('Audio upload error:', error);
+    res.status(500).json({ 
+      message: 'Failed to upload audio',
+      error: error.message 
+    });
   }
 });
 
