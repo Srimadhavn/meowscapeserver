@@ -682,11 +682,23 @@ io.on('connection', async (socket) => {
 
 app.get('/api/messages', async (req, res) => {
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 50; // Messages per page
+
     const messages = await Message.find()
       .sort({ timestamp: -1 })
-      .limit(50)
+      .skip((page - 1) * limit)
+      .limit(limit + 1) // Get one extra to check if there are more
       .lean();
-    res.json(messages.reverse());
+
+    const hasMore = messages.length > limit;
+    const messagesToSend = hasMore ? messages.slice(0, -1) : messages;
+
+    res.json({
+      messages: messagesToSend.reverse(),
+      hasMore,
+      page
+    });
   } catch (error) {
     console.error('Error fetching messages:', error);
     res.status(500).json({ message: 'Failed to fetch messages' });
