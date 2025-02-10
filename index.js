@@ -23,13 +23,13 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
-const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:3000";
+const CLIENT_URL = process.env.CLIENT_URL || "https://meowscape.netlify.app";
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/lovechat";
 
 // Basic middleware setup
 app.use(express.json());
 app.use(cors({
-  origin: ['http://localhost:3000', 'https://meowscapeserver.onrender.com'],
+  origin: ['http://localhost:3000', 'https://meowscapeserver.onrender.com','https://meowscape.netlify.app'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   credentials: true
@@ -46,7 +46,7 @@ app.get('/health', (req, res) => {
 
 const io = new Server(server, {
   cors: {
-    origin: ['http://localhost:3000', 'https://meowscapeserver.onrender.com'],
+    origin: ['http://localhost:3000', 'https://meowscapeserver.onrender.com','https://meowscape.netlify.app'],
     methods: ["GET", "POST"],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
