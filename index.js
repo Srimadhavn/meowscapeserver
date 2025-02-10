@@ -22,20 +22,23 @@ const PORT = process.env.PORT || 5000;
 const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:3000";
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/lovechat";
 
+// Update CORS configuration
+app.use(cors({
+  origin: '*', // During development, accept all origins
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+  credentials: true
+}));
+
+// Update Socket.IO CORS
 const io = new Server(server, {
   cors: {
-    origin: CLIENT_URL,
+    origin: '*', // During development, accept all origins
     methods: ["GET", "POST"],
+    allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
   }
 });
-
-app.use(cors({
-  origin: CLIENT_URL,
-  credentials: true
-}));
-app.use(express.json());
-
 mongoose.connect(MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
