@@ -13,6 +13,7 @@ const Sticker = require('./models/Sticker');
 const ffmpeg = require('fluent-ffmpeg');
 const path = require('path');
 const fs = require('fs');
+const webpush = require('web-push');
 
 dotenv.config();
 
@@ -149,6 +150,21 @@ app.use('/api/stickers', cors());
 // Track typing status
 const typingUsers = new Map();
 
+// Generate VAPID keys using webpush.generateVAPIDKeys()
+const vapidKeys = webpush.generateVAPIDKeys();
+console.log(vapidKeys);
+// Save these keys in your .env file
+
+// Store push subscriptions
+const pushSubscriptions = new Map();
+
+// Add near the top after dotenv.config()
+webpush.setVapidDetails(
+  'mailto:your@email.com', // Your email
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
+
 async function initializeUsers() {
   try {
     // Check for existing users
@@ -230,24 +246,21 @@ app.get('/api/stickers', async (req, res) => {
     
     // Group stickers by pack name
     const customPacks = customStickers.reduce((acc, sticker) => {
+      // Create pack if it doesn't exist
       if (!acc[sticker.packName]) {
         acc[sticker.packName] = [];
       }
+      // Add sticker to pack
       acc[sticker.packName].push({
         url: sticker.imageUrl,
-        id: sticker._id
+        id: sticker._id,
+        createdBy: sticker.createdBy // Include creator info
       });
       return acc;
     }, {});
 
-    // Combine with default emoji packs
-    const allStickers = {
-      ...customPacks,
-      
-    };
-
-    console.log('Sending sticker packs:', allStickers);
-    res.json(allStickers);
+    console.log('Sending sticker packs:', customPacks);
+    res.json(customPacks);
   } catch (error) {
     console.error('Error fetching stickers:', error);
     res.status(500).json({ message: 'Failed to fetch stickers' });
@@ -269,12 +282,12 @@ app.post('/api/stickers/upload', upload.single('image'), async (req, res) => {
       resource_type: 'auto'
     });
 
-    // Save to MongoDB
+    // Save to MongoDB with correct username
     const sticker = await Sticker.create({
       imageUrl: result.secure_url,
-      packName,
-      createdBy: username,
-      order: await Sticker.countDocuments({ packName }) // Add at the end of the pack
+      packName: packName || 'My Stickers',
+      createdBy: username, // This will now be either 'Maddy' or 'Varsha'
+      order: await Sticker.countDocuments({ packName })
     });
 
     res.json({
@@ -559,6 +572,27 @@ io.on('connection', async (socket) => {
       const savedMessage = await message.save();
       
       io.emit('message', savedMessage.toObject());
+
+      // Send notification to other users
+      const notification = {
+        title: 'New Message from ' + messageData.username,
+        body: messageData.type === 'text' ? messageData.text.substring(0, 50) : 'Sent a ' + messageData.type,
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        vibrate: [100, 50, 100]
+      };
+
+      const receiverSubscription = pushSubscriptions.get(messageData.to);
+      if (receiverSubscription) {
+        try {
+          await webpush.sendNotification(
+            receiverSubscription,
+            JSON.stringify(notification)
+          );
+        } catch (error) {
+          console.error('Error sending push notification:', error);
+        }
+      }
     } catch (error) {
       console.error('Error saving message:', error);
       socket.emit('messageError', { error: 'Failed to send message' });
@@ -619,6 +653,21 @@ app.get('/api/messages', async (req, res) => {
   } catch (error) {
     console.error('Error fetching messages:', error);
     res.status(500).json({ message: 'Failed to fetch messages' });
+  }
+});
+
+// Add subscription endpoint
+app.post('/api/subscribe', async (req, res) => {
+  try {
+    const { subscription, username } = req.body;
+    // Store subscription with username
+    // You can store this in MongoDB if you want persistence
+    console.log('New push subscription for:', username);
+    pushSubscriptions.set(username, subscription);
+    res.status(200).json({ message: 'Successfully subscribed to notifications' });
+  } catch (error) {
+    console.error('Subscription error:', error);
+    res.status(500).json({ error: 'Subscription failed' });
   }
 });
 
