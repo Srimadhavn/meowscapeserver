@@ -22,7 +22,8 @@ const PORT = process.env.PORT || 5000;
 const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:3000";
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/lovechat";
 
-// Update CORS configuration
+// Basic middleware setup
+app.use(express.json());
 app.use(cors({
   origin: '*', // During development, accept all origins
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -30,6 +31,7 @@ app.use(cors({
   credentials: true
 }));
 
+// Health check endpoint - MUST be before other routes
 app.get('/health', (req, res) => {
   res.status(200).json({ 
     status: 'ok',
@@ -38,7 +40,8 @@ app.get('/health', (req, res) => {
     mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
   });
 });
-// Update Socket.IO CORS
+
+// Socket.IO setup with CORS
 const io = new Server(server, {
   cors: {
     origin: '*',
@@ -576,11 +579,26 @@ io.on('connection', async (socket) => {
   });
 });
 
+// Error handling middleware - MUST be after all routes
+app.use((err, req, res, next) => {
+  console.error('Error:', err);
+  res.status(500).json({ 
+    message: 'Internal server error', 
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined 
+  });
+});
+
+// 404 handler - MUST be after all routes
+app.use((req, res) => {
+  res.status(404).json({ message: 'Not found' });
+});
+
+// Start server
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-// Error handling
+// Global error handling
 process.on('unhandledRejection', (error) => {
   console.error('Unhandled promise rejection:', error);
 });
