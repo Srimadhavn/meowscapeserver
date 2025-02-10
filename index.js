@@ -129,8 +129,8 @@ const typingUsers = new Map();
 async function initializeUsers() {
   try {
     const users = [
-      { username: 'user1', password: 'yourpassword123' },
-      { username: 'user2', password: 'herpassword123' }
+      { username: 'Maddy', password: 'varsha' },
+      { username: 'Varsha', password: 'maddy' }
     ];
 
     for (const user of users) {
