@@ -78,21 +78,44 @@ cloudinary.config({
 // First, define the storage configuration
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    let uploadPath = 'uploads/';
-    if (file.mimetype.startsWith('video/')) {
-      uploadPath = path.join(uploadPath, 'videos');
-    } else if (file.mimetype.startsWith('image/')) {
-      uploadPath = path.join(uploadPath, 'images');
-    } else if (file.mimetype.startsWith('audio/')) {
-      uploadPath = path.join(uploadPath, 'audio');
-    } else {
-      uploadPath = path.join(uploadPath, 'files');
+    const uploadPath = path.join('uploads', 'images');
+    // Ensure upload directory exists
+    if (!fs.existsSync(uploadPath)) {
+      fs.mkdirSync(uploadPath, { recursive: true });
     }
     cb(null, uploadPath);
   },
   filename: (req, file, cb) => {
+    // Generate a unique filename while preserving the original extension
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    cb(null, `image-${uniqueSuffix}${ext}`);
+  }
+});
+
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = [
+    'image/jpeg',
+    'image/png',
+    'image/gif',
+    'image/webp',
+    'image/heic',
+    'image/heif'
+  ];
+  
+  if (allowedTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error(`Invalid file type. Allowed types are: ${allowedTypes.join(', ')}`));
+  }
+};
+
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: {
+    fileSize: 20 * 1024 * 1024, // 20MB limit
+    files: 1
   }
 });
 
@@ -107,81 +130,6 @@ const filesDir = path.join(uploadsDir, 'files');
 [uploadsDir, imagesDir, videosDir, audioDir, filesDir].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
-  }
-});
-
-// Then configure multer with the storage
-const upload = multer({
-  storage,
-  limits: {
-    fileSize: 100 * 1024 * 1024 // 100MB limit
-  },
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = [
-      // Images
-      'image/jpeg', 'image/png', 'image/gif',
-      // Videos
-      'video/mp4', 'video/quicktime', 'video/x-msvideo',
-      // Audio
-      'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/webm',
-      // Documents
-      'application/pdf',
-      'application/msword',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/vnd.ms-excel',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-powerpoint',
-      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      'text/plain'
-    ];
-    
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type'));
-    }
-  }
-});
-
-// Configure multer specifically for audio uploads
-const audioUpload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => {
-      const dir = 'uploads/audio';
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      cb(null, dir);
-    },
-    filename: (req, file, cb) => {
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-      // Support multiple audio formats
-      const ext = file.originalname.split('.').pop() || 'webm';
-      cb(null, `${uniqueSuffix}.${ext}`);
-    }
-  }),
-  limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB limit
-  },
-  fileFilter: (req, file, cb) => {
-    // Accept more audio formats
-    const allowedMimeTypes = [
-      'audio/webm',
-      'audio/mp4',
-      'audio/mpeg',
-      'audio/mp3',
-      'audio/wav',
-      'audio/ogg',
-      'video/webm', // Some mobile devices send audio as video/webm
-      'application/octet-stream' // For iOS voice recordings
-    ];
-    
-    if (allowedMimeTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      console.log('Rejected file type:', file.mimetype);
-      cb(new Error('Invalid file type. Only audio files are allowed.'));
-    }
   }
 });
 
@@ -396,24 +344,36 @@ app.post('/api/upload-image', upload.single('image'), async (req, res) => {
       return res.status(400).json({ message: 'No file uploaded' });
     }
 
-    // Ensure the file is an image
-    if (!req.file.mimetype.startsWith('image/')) {
+    // Handle both image and camera capture MIME types
+    const validImageTypes = [
+      'image/jpeg',
+      'image/png',
+      'image/gif',
+      'image/webp',
+      'image/heic',  // iOS camera format
+      'image/heif'   // iOS camera format
+    ];
+
+    if (!validImageTypes.includes(req.file.mimetype)) {
       console.log('Invalid file type:', req.file.mimetype);
       fs.unlinkSync(req.file.path); // Clean up invalid file
-      return res.status(400).json({ message: 'Invalid file type. Please upload an image.' });
+      return res.status(400).json({ message: 'Invalid file type. Please upload a valid image.' });
     }
 
     console.log('Uploading to Cloudinary...'); // Debug log
 
-    // Upload to Cloudinary with error handling
+    // Enhanced Cloudinary upload with image optimization
     const result = await cloudinary.uploader.upload(req.file.path, {
       folder: 'chat-images',
       transformation: [
-        { quality: 'auto' },
+        { quality: 'auto:good' },
         { fetch_format: 'auto' },
-        { width: 1200, crop: 'limit' }
+        { width: 2000, crop: 'limit' },  // Increased max width for high-res images
+        { angle: "exif" }  // Automatically fix image rotation
       ],
-      resource_type: 'auto'
+      resource_type: 'auto',
+      allowed_formats: ['jpg', 'png', 'gif', 'webp', 'heic', 'heif'],
+      format: 'webp'  // Convert all images to WebP for better compression
     }).catch(error => {
       console.error('Cloudinary upload error:', error);
       throw new Error('Failed to upload to Cloudinary');
@@ -424,10 +384,17 @@ app.post('/api/upload-image', upload.single('image'), async (req, res) => {
 
     console.log('Cloudinary upload successful:', result.secure_url); // Debug log
 
+    // Return additional image metadata
     res.json({ 
       url: result.secure_url,
-      type: 'image'
+      type: 'image',
+      width: result.width,
+      height: result.height,
+      format: result.format,
+      size: result.bytes,
+      original_filename: req.file.originalname
     });
+
   } catch (error) {
     console.error('Error in image upload:', error);
     // Clean up the file if it exists and there was an error
