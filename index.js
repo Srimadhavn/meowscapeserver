@@ -179,20 +179,18 @@ app.use('/api/stickers', cors({
 // Track typing status
 const typingUsers = new Map();
 
-// Generate VAPID keys using webpush.generateVAPIDKeys()
-const vapidKeys = webpush.generateVAPIDKeys();
-console.log(vapidKeys);
-// Save these keys in your .env file
+// Near the top with other configurations
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
+
+webpush.setVapidDetails(
+  'mailto:srimadhavan93@gmail.com', 
+  VAPID_PUBLIC_KEY,
+  VAPID_PRIVATE_KEY
+);
 
 // Store push subscriptions
 const pushSubscriptions = new Map();
-
-// Add near the top after dotenv.config()
-webpush.setVapidDetails(
-  'mailto:your@email.com', // Your email
-  process.env.VAPID_PUBLIC_KEY,
-  process.env.VAPID_PRIVATE_KEY
-);
 
 async function initializeUsers() {
   try {
@@ -643,21 +641,28 @@ io.on('connection', async (socket) => {
   // Handle message deletion
   socket.on('deleteMessage', async ({ messageId, username }) => {
     try {
+      // Find the message to ensure the requester is authorized to delete it
       const message = await Message.findById(messageId);
-      if (message && message.username === username) {
-        message.text = 'This message was deleted';
-        message.isDeleted = true;
-        await message.save();
-        
-        io.emit('messageUpdated', {
-          messageId,
-          text: 'This message was deleted',
-          isDeleted: true
-        });
+      if (!message) {
+        socket.emit('error', { message: 'Message not found' });
+        return;
       }
+
+      // Check if the user requesting deletion is the sender
+      if (message.username !== username) {
+        socket.emit('error', { message: 'Unauthorized to delete this message' });
+        return;
+      }
+
+      // Delete the message from the database
+      await Message.findByIdAndDelete(messageId);
+
+      // Emit messageDeleted event to all clients
+      io.emit('messageDeleted', { messageId });
+      console.log(`Message deleted: ${messageId}`);
     } catch (error) {
-      console.error('Error updating message:', error);
-      socket.emit('deleteError', 'Failed to delete message');
+      console.error('Error deleting message:', error);
+      socket.emit('error', { message: 'Failed to delete message' });
     }
   });
 
@@ -667,7 +672,7 @@ io.on('connection', async (socket) => {
     console.log('User disconnected:', socket.id);
   });
 
-  const MESSAGES_PER_PAGE = 1000;
+  const MESSAGES_PER_PAGE = 100000000;
 
   socket.on('fetchMessages', async ({ page = 1 }) => {
     try {
@@ -693,7 +698,7 @@ app.get('/api/messages', async (req, res) => {
   try {
     const messages = await Message.find()
       .sort({ timestamp: -1 })
-      .limit(10000)
+      .limit(100000000)
       .lean();
 
     res.json({
