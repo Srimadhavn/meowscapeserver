@@ -641,6 +641,8 @@ io.on('connection', async (socket) => {
 // Handle message deletion by marking it as deleted instead of removing from the database
 socket.on('deleteMessage', async ({ messageId, username }) => {
   try {
+    console.log(`🔄 Delete request received for messageId: ${messageId} by user: ${username}`);
+
     // Atomically find and update the message to mark it as deleted
     const message = await Message.findOneAndUpdate(
       { _id: messageId, username }, // Ensure the user owns the message
@@ -649,18 +651,20 @@ socket.on('deleteMessage', async ({ messageId, username }) => {
     );
 
     if (!message) {
-      socket.emit('error', { message: 'Message not found or unauthorized to delete' });
+      console.log(`🚫 Message not found or unauthorized for deletion. messageId: ${messageId}, username: ${username}`);
+      socket.emit('deleteError', { message: 'Message not found or unauthorized to delete.' });
       return;
     }
 
     // Emit messageDeleted event to all connected clients with the messageId
     io.emit('messageDeleted', { messageId: message._id });
-    console.log(`Message marked as deleted: ${messageId}`);
+    console.log(`Message deleted: ${messageId}`);
   } catch (error) {
     console.error('Error deleting message:', error);
-    socket.emit('error', { message: 'Failed to delete message' });
+    socket.emit('deleteError', { message: 'Failed to delete message.' });
   }
 });
+
   socket.on('disconnect', () => {
     typingUsers.delete(socket.id);
     socket.broadcast.emit('userTyping', Array.from(typingUsers.values()));
