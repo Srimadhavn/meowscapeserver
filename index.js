@@ -155,16 +155,31 @@ const audioUpload = multer({
     },
     filename: (req, file, cb) => {
       const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-      cb(null, uniqueSuffix + '.webm');
+      // Support multiple audio formats
+      const ext = file.originalname.split('.').pop() || 'webm';
+      cb(null, `${uniqueSuffix}.${ext}`);
     }
   }),
   limits: {
     fileSize: 10 * 1024 * 1024 // 10MB limit
   },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'audio/webm' || file.mimetype.startsWith('audio/')) {
+    // Accept more audio formats
+    const allowedMimeTypes = [
+      'audio/webm',
+      'audio/mp4',
+      'audio/mpeg',
+      'audio/mp3',
+      'audio/wav',
+      'audio/ogg',
+      'video/webm', // Some mobile devices send audio as video/webm
+      'application/octet-stream' // For iOS voice recordings
+    ];
+    
+    if (allowedMimeTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
+      console.log('Rejected file type:', file.mimetype);
       cb(new Error('Invalid file type. Only audio files are allowed.'));
     }
   }
@@ -502,26 +517,32 @@ app.post('/api/upload-file', upload.single('file'), async (req, res) => {
   }
 });
 
-// Audio upload endpoint
+// Updated audio upload endpoint
 app.post('/api/upload-audio', audioUpload.single('audio'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No audio file uploaded' });
     }
 
-    console.log('Uploading audio file:', req.file); // Debug log
+    console.log('Uploading audio file:', req.file);
 
     // Make sure the uploads directory exists
     if (!fs.existsSync('uploads/audio')) {
       fs.mkdirSync('uploads/audio', { recursive: true });
     }
 
-    // Upload to Cloudinary with proper error handling
+    // Upload to Cloudinary with enhanced configuration
     try {
       const result = await cloudinary.uploader.upload(req.file.path, {
         resource_type: 'video', // Cloudinary uses 'video' type for audio
         folder: 'chat-audio',
-        format: 'mp3'
+        format: 'mp3', // Convert to MP3 for better compatibility
+        audio_codec: 'mp3',
+        bit_rate: '128k',
+        transformation: [
+          { audio_frequency: 44100 },
+          { audio_sample_rate: '44100' }
+        ]
       });
 
       // Clean up the temporary file
@@ -529,18 +550,17 @@ app.post('/api/upload-audio', audioUpload.single('audio'), async (req, res) => {
         fs.unlinkSync(req.file.path);
       } catch (unlinkError) {
         console.error('Error deleting temp file:', unlinkError);
-        // Continue even if cleanup fails
       }
 
-      // Send response
       res.json({ 
         url: result.secure_url,
-        type: 'audio'
+        type: 'audio',
+        format: 'mp3',
+        duration: result.duration
       });
 
     } catch (cloudinaryError) {
       console.error('Cloudinary upload error:', cloudinaryError);
-      // Clean up on cloudinary error
       if (req.file && req.file.path) {
         try {
           fs.unlinkSync(req.file.path);
@@ -548,11 +568,15 @@ app.post('/api/upload-audio', audioUpload.single('audio'), async (req, res) => {
           console.error('Error deleting temp file:', unlinkError);
         }
       }
-      throw new Error('Failed to upload to Cloudinary');
+      throw new Error('Failed to upload to Cloudinary: ' + cloudinaryError.message);
     }
 
   } catch (error) {
     console.error('Audio upload error:', error);
+    // Ensure file cleanup on error
+    if (req.file && req.file.path && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
     res.status(500).json({ 
       message: 'Failed to upload audio',
       error: error.message 
