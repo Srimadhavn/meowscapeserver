@@ -51,14 +51,22 @@ const io = new Server(server, {
   }
 });
 
-mongoose.connect(MONGODB_URI, {
+// MongoDB connection with better error handling
+mongoose.connect(process.env.MONGODB_URI || process.env.MONGO_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
   serverSelectionTimeoutMS: 5000,
   socketTimeoutMS: 45000,
 })
-  .then(() => console.log('MongoDB connected successfully'))
-  .catch((err) => console.error('MongoDB connection failed:', err));
+.then(() => {
+  console.log('MongoDB connected successfully');
+  // Initialize users after successful connection
+  initializeUsers();
+})
+.catch((err) => {
+  console.error('MongoDB connection failed:', err);
+  process.exit(1);
+});
 
 // Configure Cloudinary
 cloudinary.config({
@@ -143,6 +151,7 @@ const typingUsers = new Map();
 
 async function initializeUsers() {
   try {
+    // Check for existing users
     const users = [
       { username: 'Maddy', password: 'varsha' },
       { username: 'Varsha', password: 'maddy' }
@@ -159,12 +168,31 @@ async function initializeUsers() {
         console.log(`Created user: ${user.username}`);
       }
     }
+
+    // Check for existing messages
+    const messageCount = await Message.countDocuments();
+    if (messageCount === 0) {
+      const initialMessages = [
+        {
+          username: 'Maddy',
+          text: 'Welcome to our chat! ❤️',
+          type: 'text',
+          timestamp: new Date()
+        },
+        {
+          username: 'Varsha',
+          text: 'Hi Maddy! 🌟',
+          type: 'text',
+          timestamp: new Date()
+        }
+      ];
+      await Message.insertMany(initialMessages);
+      console.log('Initial messages created');
+    }
   } catch (error) {
-    console.error('Error initializing users:', error);
+    console.error('Error initializing data:', error);
   }
 }
-
-initializeUsers();
 
 app.post('/api/login', async (req, res) => {
   try {
@@ -486,12 +514,13 @@ io.on('connection', async (socket) => {
   // Send previous messages on connection
   try {
     const previousMessages = await Message.find()
-      .sort({ timestamp: 1 })
-      .lean()
-      .exec();
-    socket.emit('previousMessages', previousMessages);
+      .sort({ timestamp: -1 })
+      .limit(50)
+      .lean();
+    socket.emit('previousMessages', previousMessages.reverse());
   } catch (error) {
     console.error('Error fetching previous messages:', error);
+    socket.emit('error', { message: 'Failed to fetch messages' });
   }
 
   // Handle typing status
@@ -577,6 +606,20 @@ io.on('connection', async (socket) => {
       socket.emit('error', { message: 'Failed to fetch messages' });
     }
   });
+});
+
+// Add a messages endpoint
+app.get('/api/messages', async (req, res) => {
+  try {
+    const messages = await Message.find()
+      .sort({ timestamp: -1 })
+      .limit(50)
+      .lean();
+    res.json(messages.reverse());
+  } catch (error) {
+    console.error('Error fetching messages:', error);
+    res.status(500).json({ message: 'Failed to fetch messages' });
+  }
 });
 
 // Error handling middleware - MUST be after all routes
