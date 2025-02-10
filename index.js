@@ -75,63 +75,218 @@ cloudinary.config({
   secure: true
 });
 
-// First, define the storage configuration
+// Add security middleware at the top of your app configuration
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      connectSrc: ["'self'", 'wss:', 'https:', process.env.CLIENT_URL],
+      imgSrc: ["'self'", 'data:', 'blob:', 'https:', process.env.CLIENT_URL, 'https://res.cloudinary.com'],
+      mediaSrc: ["'self'", 'data:', 'blob:', 'https:', process.env.CLIENT_URL, 'https://res.cloudinary.com'],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+    },
+  },
+  crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
+
+// Rate limiting configuration
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Apply rate limiting to all routes
+app.use(limiter);
+
+// Specific stricter rate limit for authentication routes
+const authLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5, // 5 attempts per hour
+  message: 'Too many login attempts, please try again later'
+});
+
+app.use('/api/login', authLimiter);
+
+// Add request validation middleware
+const validateRequest = (schema) => {
+  return (req, res, next) => {
+    const { error } = schema.validate(req.body);
+    if (error) {
+      return res.status(400).json({ message: error.details[0].message });
+    }
+    next();
+  };
+};
+
+// Sanitize file names
+const sanitizeFilename = (filename) => {
+  return filename.replace(/[^a-zA-Z0-9.-]/g, '_');
+};
+
+// Update upload configurations with better security
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadPath = path.join('uploads', 'images');
-    // Ensure upload directory exists
     if (!fs.existsSync(uploadPath)) {
       fs.mkdirSync(uploadPath, { recursive: true });
     }
     cb(null, uploadPath);
   },
   filename: (req, file, cb) => {
-    // Generate a unique filename while preserving the original extension
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    const sanitizedName = sanitizeFilename(file.originalname);
+    const ext = path.extname(sanitizedName).toLowerCase() || '.jpg';
     cb(null, `image-${uniqueSuffix}${ext}`);
   }
 });
 
-const fileFilter = (req, file, cb) => {
-  const allowedTypes = [
-    'image/jpeg',
-    'image/png',
-    'image/gif',
-    'image/webp',
-    'image/heic',
-    'image/heif'
-  ];
-  
-  if (allowedTypes.includes(file.mimetype)) {
-    cb(null, true);
-  } else {
-    cb(new Error(`Invalid file type. Allowed types are: ${allowedTypes.join(', ')}`));
-  }
-};
-
+// Enhanced error handling for file uploads
 const upload = multer({
   storage,
-  fileFilter,
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      'image/jpeg',
+      'image/png',
+      'image/gif',
+      'image/webp',
+      'image/heic',
+      'image/heif'
+    ];
+    
+    if (!allowedTypes.includes(file.mimetype)) {
+      return cb(new Error('Invalid file type'), false);
+    }
+
+    if (file.size > 20 * 1024 * 1024) {
+      return cb(new Error('File too large'), false);
+    }
+
+    cb(null, true);
+  },
   limits: {
-    fileSize: 20 * 1024 * 1024, // 20MB limit
+    fileSize: 20 * 1024 * 1024,
     files: 1
   }
-});
+}).single('image');
 
-// Create necessary directories
-const uploadsDir = 'uploads';
-const imagesDir = path.join(uploadsDir, 'images');
-const videosDir = path.join(uploadsDir, 'videos');
-const audioDir = path.join(uploadsDir, 'audio');
-const filesDir = path.join(uploadsDir, 'files');
+// Enhanced error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Error:', {
+    message: err.message,
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+    timestamp: new Date().toISOString(),
+    path: req.path,
+    method: req.method,
+    ip: req.ip
+  });
 
-// Create directories if they don't exist
-[uploadsDir, imagesDir, videosDir, audioDir, filesDir].forEach(dir => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({
+      message: 'File upload error',
+      error: err.message
+    });
   }
+
+  if (err.name === 'ValidationError') {
+    return res.status(400).json({
+      message: 'Validation error',
+      error: err.message
+    });
+  }
+
+  res.status(err.status || 500).json({
+    message: 'Internal server error',
+    error: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
+  });
 });
+
+// Cleanup temporary files periodically
+const cleanupTempFiles = () => {
+  const tempDirs = ['uploads/images', 'uploads/audio', 'uploads/videos'];
+  const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+
+  tempDirs.forEach(dir => {
+    if (fs.existsSync(dir)) {
+      fs.readdir(dir, (err, files) => {
+        if (err) {
+          console.error(`Error reading directory ${dir}:`, err);
+          return;
+        }
+
+        files.forEach(file => {
+          const filePath = path.join(dir, file);
+          fs.stat(filePath, (err, stats) => {
+            if (err) {
+              console.error(`Error getting file stats for ${filePath}:`, err);
+              return;
+            }
+
+            if (Date.now() - stats.mtime.getTime() > maxAge) {
+              fs.unlink(filePath, err => {
+                if (err) {
+                  console.error(`Error deleting file ${filePath}:`, err);
+                }
+              });
+            }
+          });
+        });
+      });
+    }
+  });
+};
+
+// Run cleanup every 6 hours
+setInterval(cleanupTempFiles, 6 * 60 * 60 * 1000);
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received. Performing graceful shutdown...');
+  server.close(() => {
+    console.log('Server closed');
+    mongoose.connection.close(false, () => {
+      console.log('MongoDB connection closed');
+      process.exit(0);
+    });
+  });
+});
+
+// Uncaught exception handler
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  // Attempt to close server gracefully
+  server.close(() => {
+    console.log('Server closed due to uncaught exception');
+    process.exit(1);
+  });
+  
+  // If server hasn't closed in 30 seconds, force shutdown
+  setTimeout(() => {
+    console.error('Could not close server gracefully, forcing shutdown');
+    process.exit(1);
+  }, 30000);
+});
+
+// Unhandled rejection handler
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Log but don't crash the server
+});
+
+// Memory usage monitoring
+setInterval(() => {
+  const used = process.memoryUsage();
+  console.log('Memory usage:', {
+    rss: `${Math.round(used.rss / 1024 / 1024)}MB`,
+    heapTotal: `${Math.round(used.heapTotal / 1024 / 1024)}MB`,
+    heapUsed: `${Math.round(used.heapUsed / 1024 / 1024)}MB`,
+    external: `${Math.round(used.external / 1024 / 1024)}MB`
+  });
+}, 30 * 60 * 1000); // Every 30 minutes
 
 // Enable CORS for the sticker endpoints
 app.use('/api/stickers', cors({
@@ -712,11 +867,6 @@ app.post('/api/subscribe', async (req, res) => {
     res.status(500).json({ error: 'Subscription failed' });
   }
 });
-
-app.use(rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100 
-}));
 
 app.use(helmet());
 app.use(compression());
