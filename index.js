@@ -30,15 +30,24 @@ app.use(cors({
   credentials: true
 }));
 
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'ok',
+    timestamp: new Date(),
+    uptime: process.uptime(),
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+  });
+});
 // Update Socket.IO CORS
 const io = new Server(server, {
   cors: {
-    origin: '*', // During development, accept all origins
+    origin: '*',
     methods: ["GET", "POST"],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
   }
 });
+
 mongoose.connect(MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
