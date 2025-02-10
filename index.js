@@ -26,23 +26,21 @@ const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/lovech
 // Basic middleware setup
 app.use(express.json());
 app.use(cors({
-  origin: '*', // During development, accept all origins
+  origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   credentials: true
 }));
 
-// Health check endpoint - MUST be before other routes
 app.get('/health', (req, res) => {
   res.status(200).json({ 
     status: 'ok',
     timestamp: new Date(),
     uptime: process.uptime(),
-    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+    mongodb: mongoose.connection.readyState === 1   
   });
 });
 
-// Socket.IO setup with CORS
 const io = new Server(server, {
   cors: {
     origin: '*',
@@ -52,10 +50,7 @@ const io = new Server(server, {
   }
 });
 
-// MongoDB connection with better error handling
 mongoose.connect(process.env.MONGODB_URI || process.env.MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
   serverSelectionTimeoutMS: 5000,
   socketTimeoutMS: 45000,
 })
@@ -73,7 +68,8 @@ mongoose.connect(process.env.MONGODB_URI || process.env.MONGO_URI, {
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+  secure: true
 });
 
 // First, define the storage configuration
@@ -141,6 +137,26 @@ const upload = multer({
     } else {
       cb(new Error('Invalid file type'));
     }
+  }
+});
+
+// Add this near your other multer configurations
+const audioUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const dir = 'uploads/audio';
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      cb(null, uniqueSuffix + '.webm');
+    }
+  }),
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB limit
   }
 });
 
@@ -490,7 +506,7 @@ app.post('/api/upload-file', upload.single('file'), async (req, res) => {
   }
 });
 
-// Add audio upload endpoint
+// Update the audio upload endpoint
 app.post('/api/upload-audio', upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) {
@@ -499,8 +515,8 @@ app.post('/api/upload-audio', upload.single('audio'), async (req, res) => {
 
     // Upload to Cloudinary
     const result = await cloudinary.uploader.upload(req.file.path, {
-      folder: 'chat-audio',
       resource_type: 'video', // Cloudinary uses 'video' type for audio files
+      folder: 'chat-audio',
       format: 'mp3'
     });
 
@@ -683,6 +699,14 @@ app.use((err, req, res, next) => {
 // 404 handler - MUST be after all routes
 app.use((req, res) => {
   res.status(404).json({ message: 'Not found' });
+});
+
+// Add this after your other middleware
+app.use(express.static(path.join(__dirname, '../client/build')));
+
+// Add this after all your API routes
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../client/build', 'index.html'));
 });
 
 // Start server
