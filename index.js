@@ -691,26 +691,14 @@ io.on('connection', async (socket) => {
 
 app.get('/api/messages', async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = 10000; 
-
-    const [messages, total] = await Promise.all([
-      Message.find()
-        .sort({ timestamp: -1 })
-        .skip(skip)
-        .limit(limit + 1)
-        .lean(),
-      Message.countDocuments()
-    ]);
-
-    const hasMore = messages.length > limit;
-    const messagesToSend = hasMore ? messages.slice(0, -1) : messages;
+    const messages = await Message.find()
+      .sort({ timestamp: -1 })
+      .limit(10000)
+      .lean();
 
     res.json({
-      messages: messagesToSend.reverse(),
-      hasMore,
-      page,
-      total
+      messages: messages.reverse(),
+      hasMore: false
     });
   } catch (error) {
     console.error('Error fetching messages:', error);
