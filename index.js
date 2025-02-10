@@ -23,13 +23,13 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
-const CLIENT_URL = process.env.CLIENT_URL || "https://meowscape.netlify.app/";
+const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:3000";
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/lovechat";
 
 // Basic middleware setup
 app.use(express.json());
 app.use(cors({
-  origin: ['http://localhost:3000', 'https://meowscapeserver.onrender.com','https://meowscape.netlify.app'],
+  origin: ['http://localhost:3000', 'https://meowscapeserver.onrender.com'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   credentials: true
@@ -46,7 +46,7 @@ app.get('/health', (req, res) => {
 
 const io = new Server(server, {
   cors: {
-    origin: ['http://localhost:3000', 'https://meowscapeserver.onrender.com','https://meowscape.netlify.app'],
+    origin: ['http://localhost:3000', 'https://meowscapeserver.onrender.com'],
     methods: ["GET", "POST"],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
@@ -638,34 +638,29 @@ io.on('connection', async (socket) => {
     }
   });
 
-  // Handle message deletion
-  socket.on('deleteMessage', async ({ messageId, username }) => {
-    try {
-      // Find the message to ensure the requester is authorized to delete it
-      const message = await Message.findById(messageId);
-      if (!message) {
-        socket.emit('error', { message: 'Message not found' });
-        return;
-      }
+// Handle message deletion by marking it as deleted instead of removing from the database
+socket.on('deleteMessage', async ({ messageId, username }) => {
+  try {
+    // Atomically find and update the message to mark it as deleted
+    const message = await Message.findOneAndUpdate(
+      { _id: messageId, username }, // Ensure the user owns the message
+      { type: 'deleted', text: 'This message was deleted' },
+      { new: true } // Return the updated document
+    );
 
-      // Check if the user requesting deletion is the sender
-      if (message.username !== username) {
-        socket.emit('error', { message: 'Unauthorized to delete this message' });
-        return;
-      }
-
-      // Delete the message from the database
-      await Message.findByIdAndDelete(messageId);
-
-      // Emit messageDeleted event to all clients
-      io.emit('messageDeleted', { messageId });
-      console.log(`Message deleted: ${messageId}`);
-    } catch (error) {
-      console.error('Error deleting message:', error);
-      socket.emit('error', { message: 'Failed to delete message' });
+    if (!message) {
+      socket.emit('error', { message: 'Message not found or unauthorized to delete' });
+      return;
     }
-  });
 
+    // Emit messageDeleted event to all connected clients with the messageId
+    io.emit('messageDeleted', { messageId: message._id });
+    console.log(`Message marked as deleted: ${messageId}`);
+  } catch (error) {
+    console.error('Error deleting message:', error);
+    socket.emit('error', { message: 'Failed to delete message' });
+  }
+});
   socket.on('disconnect', () => {
     typingUsers.delete(socket.id);
     socket.broadcast.emit('userTyping', Array.from(typingUsers.values()));
