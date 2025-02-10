@@ -140,15 +140,11 @@ const upload = multer({
   }
 });
 
-// Add this near your other multer configurations
+// Configure multer specifically for audio uploads
 const audioUpload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {
-      const dir = 'uploads/audio';
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      cb(null, dir);
+      cb(null, audioDir);
     },
     filename: (req, file, cb) => {
       const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -157,6 +153,14 @@ const audioUpload = multer({
   }),
   limits: {
     fileSize: 10 * 1024 * 1024 // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept audio/webm and audio/* MIME types
+    if (file.mimetype === 'audio/webm' || file.mimetype.startsWith('audio/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only audio files are allowed.'));
+    }
   }
 });
 
@@ -183,7 +187,6 @@ webpush.setVapidDetails(
 
 async function initializeUsers() {
   try {
-    // Check for existing users
     const users = [
       { username: 'Maddy', password: 'varsha' },
       { username: 'Varsha', password: 'maddy' }
@@ -204,20 +207,6 @@ async function initializeUsers() {
     // Check for existing messages
     const messageCount = await Message.countDocuments();
     if (messageCount === 0) {
-      const initialMessages = [
-        {
-          username: 'Maddy',
-          text: 'Welcome to our chat! ❤️',
-          type: 'text',
-          timestamp: new Date()
-        },
-        {
-          username: 'Varsha',
-          text: 'Hi Maddy! 🌟',
-          type: 'text',
-          timestamp: new Date()
-        }
-      ];
       await Message.insertMany(initialMessages);
       console.log('Initial messages created');
     }
@@ -506,8 +495,8 @@ app.post('/api/upload-file', upload.single('file'), async (req, res) => {
   }
 });
 
-// Update the audio upload endpoint
-app.post('/api/upload-audio', upload.single('audio'), async (req, res) => {
+// Audio upload endpoint
+app.post('/api/upload-audio', audioUpload.single('audio'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No audio file uploaded' });
@@ -515,24 +504,45 @@ app.post('/api/upload-audio', upload.single('audio'), async (req, res) => {
 
     // Upload to Cloudinary
     const result = await cloudinary.uploader.upload(req.file.path, {
-      resource_type: 'video', // Cloudinary uses 'video' type for audio files
+      resource_type: 'video', // Cloudinary uses 'video' type for audio
       folder: 'chat-audio',
-      format: 'mp3'
+      format: 'mp3',
+      audio_codec: 'aac', // Use AAC codec for better compatibility
+      bit_rate: '128k' // Set bitrate for quality
     });
 
     // Clean up the temporary file
     fs.unlinkSync(req.file.path);
 
+    // Save to database
+    const message = new Message({
+      type: 'audio',
+      text: result.secure_url,
+      username: req.body.username || 'Anonymous',
+      timestamp: new Date()
+    });
+
+    await message.save();
+
+    // Send response
     res.json({ 
       url: result.secure_url,
-      type: 'audio'
+      type: 'audio',
+      messageId: message._id
     });
+
   } catch (error) {
     console.error('Error uploading audio:', error);
+    
     // Clean up the file if it exists and there was an error
     if (req.file && req.file.path) {
-      fs.unlinkSync(req.file.path);
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        console.error('Error deleting temporary file:', unlinkError);
+      }
     }
+    
     res.status(500).json({ message: 'Failed to upload audio' });
   }
 });
@@ -658,7 +668,6 @@ io.on('connection', async (socket) => {
   });
 });
 
-// Add a messages endpoint
 app.get('/api/messages', async (req, res) => {
   try {
     const messages = await Message.find()
@@ -672,12 +681,9 @@ app.get('/api/messages', async (req, res) => {
   }
 });
 
-// Add subscription endpoint
 app.post('/api/subscribe', async (req, res) => {
   try {
     const { subscription, username } = req.body;
-    // Store subscription with username
-    // You can store this in MongoDB if you want persistence
     console.log('New push subscription for:', username);
     pushSubscriptions.set(username, subscription);
     res.status(200).json({ message: 'Successfully subscribed to notifications' });
@@ -687,7 +693,6 @@ app.post('/api/subscribe', async (req, res) => {
   }
 });
 
-// Error handling middleware - MUST be after all routes
 app.use((err, req, res, next) => {
   console.error('Error:', err);
   res.status(500).json({ 
@@ -696,12 +701,10 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler - MUST be after all routes
 app.use((req, res) => {
   res.status(404).json({ message: 'Not found' });
 });
 
-// Add this after your other middleware
 app.use(express.static(path.join(__dirname, '../client/build')));
 
 // Add this after all your API routes
