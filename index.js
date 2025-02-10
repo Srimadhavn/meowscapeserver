@@ -14,6 +14,9 @@ const ffmpeg = require('fluent-ffmpeg');
 const path = require('path');
 const fs = require('fs');
 const webpush = require('web-push');
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
+const compression = require('compression');
 
 dotenv.config();
 
@@ -33,11 +36,11 @@ app.use(cors({
 }));
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'ok',
-    timestamp: new Date(),
+  res.json({
+    status: 'healthy',
     uptime: process.uptime(),
-    mongodb: mongoose.connection.readyState === 1   
+    timestamp: new Date(),
+    memory: process.memoryUsage()
   });
 });
 
@@ -642,11 +645,18 @@ io.on('connection', async (socket) => {
     try {
       const message = await Message.findById(messageId);
       if (message && message.username === username) {
-        await Message.findByIdAndDelete(messageId);
-        io.emit('messageDeleted', messageId);
+        message.text = 'This message was deleted';
+        message.isDeleted = true;
+        await message.save();
+        
+        io.emit('messageUpdated', {
+          messageId,
+          text: 'This message was deleted',
+          isDeleted: true
+        });
       }
     } catch (error) {
-      console.error('Error deleting message:', error);
+      console.error('Error updating message:', error);
       socket.emit('deleteError', 'Failed to delete message');
     }
   });
@@ -657,8 +667,7 @@ io.on('connection', async (socket) => {
     console.log('User disconnected:', socket.id);
   });
 
-  // Update the message fetching endpoint
-  const MESSAGES_PER_PAGE = 50;
+  const MESSAGES_PER_PAGE = 1000;
 
   socket.on('fetchMessages', async ({ page = 1 }) => {
     try {
@@ -683,13 +692,16 @@ io.on('connection', async (socket) => {
 app.get('/api/messages', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = 50; // Messages per page
+    const limit = 10000; 
 
-    const messages = await Message.find()
-      .sort({ timestamp: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit + 1) // Get one extra to check if there are more
-      .lean();
+    const [messages, total] = await Promise.all([
+      Message.find()
+        .sort({ timestamp: -1 })
+        .skip(skip)
+        .limit(limit + 1)
+        .lean(),
+      Message.countDocuments()
+    ]);
 
     const hasMore = messages.length > limit;
     const messagesToSend = hasMore ? messages.slice(0, -1) : messages;
@@ -697,7 +709,8 @@ app.get('/api/messages', async (req, res) => {
     res.json({
       messages: messagesToSend.reverse(),
       hasMore,
-      page
+      page,
+      total
     });
   } catch (error) {
     console.error('Error fetching messages:', error);
@@ -717,6 +730,14 @@ app.post('/api/subscribe', async (req, res) => {
   }
 });
 
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100 
+}));
+
+app.use(helmet());
+app.use(compression());
+
 app.use((err, req, res, next) => {
   console.error('Error:', err);
   res.status(500).json({ 
@@ -731,19 +752,21 @@ app.use((req, res) => {
 
 app.use(express.static(path.join(__dirname, '../client/build')));
 
-// Add this after all your API routes
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../client/build', 'index.html'));
 });
 
-// Start server
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-// Global error handling
 process.on('unhandledRejection', (error) => {
   console.error('Unhandled promise rejection:', error);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  process.exit(1);
 });
 
 module.exports = app;
